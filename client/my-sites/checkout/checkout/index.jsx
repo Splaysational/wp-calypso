@@ -871,15 +871,17 @@ function getUrlWithQueryParam( url, queryParams ) {
  * If the user purchases additional products via upsell nudges, the original saved receipt ID will be used to
  * display the Thank You page for the eCommerce plan purchase.
  *
- * @param {string} pendingOrReceiptId The receipt id for the transaction
+ * @param {object} cart The cart object
+ * @param {string} destinationUrl The url to save
  */
-function setDestinationIfEcommPlan( { cart, selectedSiteSlug, destinationUrl } ) {
+function saveUrlToCookieIfEcomm( cart, destinationUrl ) {
 	if ( hasEcommercePlan( cart ) ) {
 		persistSignupDestination( destinationUrl );
-		return;
 	}
-	const signupDestination = retrieveSignupDestination();
+}
 
+function modifyCookieUrlIfAtomic( selectedSiteSlug ) {
+	const signupDestination = retrieveSignupDestination();
 	if ( ! signupDestination ) {
 		return;
 	}
@@ -951,12 +953,8 @@ function getCheckoutCompleteRedirectPath( {
 		product,
 	} );
 
-	// Generate and save the thank-you page url in a cookie in certain cases
-	setDestinationIfEcommPlan( {
-		cart,
-		selectedSiteSlug,
-		destinationUrl: fallbackUrl,
-	} );
+	saveUrlToCookieIfEcomm( cart, fallbackUrl );
+	modifyCookieUrlIfAtomic( selectedSiteSlug );
 
 	// Fetch the thank-you page url from a cookie if it is set
 	const signupDestination = retrieveSignupDestination();
