@@ -367,39 +367,7 @@ export class Checkout extends React.Component {
 		return flatten( Object.values( purchases ) );
 	}
 
-	getFallbackDestination( pendingOrReceiptId ) {
-		const { selectedSiteSlug, selectedFeature, cart, isJetpackNotAtomic, product } = this.props;
-
-		const isCartEmpty = isEmpty( getAllCartItems( cart ) );
-		const isReceiptEmpty = ':receiptId' === pendingOrReceiptId;
-
-		// We will show the Thank You page if there's a site slug and either one of the following is true:
-		// - has a receipt number
-		// - does not have a receipt number but has an item in cart(as in the case of paying with a redirect payment type)
-		if ( selectedSiteSlug && ( ! isReceiptEmpty || ! isCartEmpty ) ) {
-			const isJetpackProduct = product && includes( JETPACK_BACKUP_PRODUCTS, product );
-			// If we just purchased a Jetpack product, redirect to the my plans page.
-			if ( isJetpackNotAtomic && isJetpackProduct ) {
-				return `/plans/my-plan/${ selectedSiteSlug }?thank-you&product=${ product }`;
-			}
-			// If we just purchased a Jetpack plan (not a Jetpack product), redirect to the Jetpack onboarding plugin install flow.
-			if ( isJetpackNotAtomic ) {
-				return `/plans/my-plan/${ selectedSiteSlug }?thank-you&install=all`;
-			}
-
-			return selectedFeature && isValidFeatureKey( selectedFeature )
-				? `/checkout/thank-you/features/${ selectedFeature }/${ selectedSiteSlug }/${ pendingOrReceiptId }`
-				: `/checkout/thank-you/${ selectedSiteSlug }/${ pendingOrReceiptId }`;
-		}
-
-		return '/';
-	}
-
 	getCheckoutCompleteRedirectPath = () => {
-		// TODO: Cleanup and simplify this function.
-		// I wouldn't be surprised if it doesn't work as intended in some scenarios.
-		// Especially around the G Suite / Concierge / Checklist logic.
-
 		const {
 			cart,
 			redirectTo,
@@ -408,102 +376,26 @@ export class Checkout extends React.Component {
 			selectedSiteSlug,
 			purchaseId,
 			previousRoute,
+			product,
+			isJetpackNotAtomic,
+			selectedFeature,
 			isEligibleForSignupDestination: isEligibleForSignupDestinationRedirect,
 			transaction: { step: { data: stepResult = null } = {} } = {},
 		} = this.props;
-		const adminUrl = selectedSite?.options?.admin_url;
-
-		// If we're given an explicit `redirectTo` query arg, make sure it's either internal
-		// (i.e. on WordPress.com), or a Jetpack or WP.com site's block editor (in wp-admin).
-		// This is required for Jetpack's (and WP.com's) paid blocks Upgrade Nudge.
-		if ( redirectTo && ! isExternal( redirectTo ) ) {
-			return redirectTo;
-		}
-		if ( redirectTo ) {
-			const { protocol, hostname, port, pathname, query } = parseUrl( redirectTo, true, true );
-
-			// We cannot simply compare `hostname` to `selectedSiteSlug`, since the latter
-			// might contain a path in the case of Jetpack subdirectory installs.
-			if ( adminUrl && redirectTo.startsWith( `${ adminUrl }post.php?` ) ) {
-				const sanitizedRedirectTo = formatUrl( {
-					protocol,
-					hostname,
-					port,
-					pathname,
-					query: {
-						post: parseInt( query.post, 10 ),
-						action: 'edit',
-						plan_upgraded: 1,
-					},
-				} );
-				return sanitizedRedirectTo;
-			}
-		}
-
-		// Note: this function is called early on for redirect-type payment methods, when the receipt isn't set yet.
-		// The `:receiptId` string is filled in by our pending page after the PayPal checkout
-		const pendingOrReceiptId =
-			stepResult?.receipt_id ?? stepResult?.orderId ?? purchaseId ?? ':receiptId';
-
-		// Generate and save the thank-you page url in a cookie in certain cases
-		setDestinationIfEcommPlan( { pendingOrReceiptId, cart, selectedSiteSlug } );
-
-		// Fetch the thank-you page url from a cookie if it is set
-		const signupDestination = retrieveSignupDestination();
-
-		if ( hasRenewalItem( cart ) ) {
-			const renewalItem = getRenewalItems( cart )[ 0 ];
-			return managePurchase( renewalItem.extra.purchaseDomain, renewalItem.extra.purchaseId );
-		}
-
-		// If cart is empty, then send the user to a generic page (not post-purchase related).
-		// For example, this case arises when a Skip button is clicked on a concierge upsell
-		// nudge opened by a direct link to /offer-support-session.
-		if ( ':receiptId' === pendingOrReceiptId && isEmpty( getAllCartItems( cart ) ) ) {
-			return signupDestination || this.getFallbackDestination( pendingOrReceiptId );
-		}
-
-		// Domain only flow
-		if ( cart.create_new_blog ) {
-			const newBlogUrl = signupDestination || this.getFallbackDestination( pendingOrReceiptId );
-			return `${ newBlogUrl }/${ pendingOrReceiptId }`;
-		}
-
-		const redirectPathForGSuiteUpsell = getRedirectUrlForGSuiteNudge( {
-			pendingOrReceiptId,
-			selectedSiteSlug,
+		return getCheckoutCompleteRedirectPath( {
 			cart,
-			stepResult,
+			redirectTo,
+			selectedSite,
 			isNewlyCreatedSite,
-		} );
-		if ( redirectPathForGSuiteUpsell ) {
-			return redirectPathForGSuiteUpsell;
-		}
-
-		const redirectPathForConciergeUpsell = getRedirectUrlForConciergeNudge( {
-			pendingOrReceiptId,
-			cart,
 			selectedSiteSlug,
+			purchaseId,
 			previousRoute,
+			selectedFeature,
+			isJetpackNotAtomic,
+			product,
+			isEligibleForSignupDestination: isEligibleForSignupDestinationRedirect,
+			stepResult,
 		} );
-		if ( redirectPathForConciergeUpsell ) {
-			return redirectPathForConciergeUpsell;
-		}
-
-		// Display mode is used to show purchase specific messaging, for e.g. the Schedule Session button
-		// when purchasing a concierge session.
-		const displayModeParam = getDisplayModeParamFromCart( cart );
-		if ( isEligibleForSignupDestinationRedirect ) {
-			return getUrlWithQueryParam(
-				signupDestination || this.getFallbackDestination( pendingOrReceiptId ),
-				displayModeParam
-			);
-		}
-
-		return getUrlWithQueryParam(
-			this.getFallbackDestination( pendingOrReceiptId ),
-			displayModeParam
-		);
 	};
 
 	handleCheckoutExternalRedirect( redirectUrl ) {
@@ -981,23 +873,172 @@ function getUrlWithQueryParam( url, queryParams ) {
  *
  * @param {string} pendingOrReceiptId The receipt id for the transaction
  */
-function setDestinationIfEcommPlan( { pendingOrReceiptId, cart, selectedSiteSlug } ) {
+function setDestinationIfEcommPlan( { cart, selectedSiteSlug, destinationUrl } ) {
 	if ( hasEcommercePlan( cart ) ) {
-		persistSignupDestination( this.getFallbackDestination( pendingOrReceiptId ) );
-	} else {
-		const signupDestination = retrieveSignupDestination();
+		persistSignupDestination( destinationUrl );
+		return;
+	}
+	const signupDestination = retrieveSignupDestination();
 
-		if ( ! signupDestination ) {
-			return;
-		}
+	if ( ! signupDestination ) {
+		return;
+	}
 
-		// If atomic site, then replace wordpress.com with wpcomstaging.com
-		if ( selectedSiteSlug && selectedSiteSlug.includes( '.wpcomstaging.com' ) ) {
-			const wpcomStagingDestination = signupDestination.replace(
-				/\b.wordpress.com/,
-				'.wpcomstaging.com'
-			);
-			persistSignupDestination( wpcomStagingDestination );
+	// If atomic site, then replace wordpress.com with wpcomstaging.com
+	if ( selectedSiteSlug && selectedSiteSlug.includes( '.wpcomstaging.com' ) ) {
+		const wpcomStagingDestination = signupDestination.replace(
+			/\b.wordpress.com/,
+			'.wpcomstaging.com'
+		);
+		persistSignupDestination( wpcomStagingDestination );
+	}
+}
+
+function getCheckoutCompleteRedirectPath( {
+	cart,
+	redirectTo,
+	selectedSite,
+	isNewlyCreatedSite,
+	selectedSiteSlug,
+	purchaseId,
+	previousRoute,
+	selectedFeature,
+	isJetpackNotAtomic,
+	product,
+	isEligibleForSignupDestination: isEligibleForSignupDestinationRedirect,
+	stepResult,
+} ) {
+	const adminUrl = selectedSite?.options?.admin_url;
+
+	// If we're given an explicit `redirectTo` query arg, make sure it's either internal
+	// (i.e. on WordPress.com), or a Jetpack or WP.com site's block editor (in wp-admin).
+	// This is required for Jetpack's (and WP.com's) paid blocks Upgrade Nudge.
+	if ( redirectTo && ! isExternal( redirectTo ) ) {
+		return redirectTo;
+	}
+	if ( redirectTo ) {
+		const { protocol, hostname, port, pathname, query } = parseUrl( redirectTo, true, true );
+
+		// We cannot simply compare `hostname` to `selectedSiteSlug`, since the latter
+		// might contain a path in the case of Jetpack subdirectory installs.
+		if ( adminUrl && redirectTo.startsWith( `${ adminUrl }post.php?` ) ) {
+			const sanitizedRedirectTo = formatUrl( {
+				protocol,
+				hostname,
+				port,
+				pathname,
+				query: {
+					post: parseInt( query.post, 10 ),
+					action: 'edit',
+					plan_upgraded: 1,
+				},
+			} );
+			return sanitizedRedirectTo;
 		}
 	}
+
+	// Note: this function is called early on for redirect-type payment methods, when the receipt isn't set yet.
+	// The `:receiptId` string is filled in by our pending page after the PayPal checkout
+	const pendingOrReceiptId =
+		stepResult?.receipt_id ?? stepResult?.orderId ?? purchaseId ?? ':receiptId';
+
+	const fallbackUrl = getFallbackDestination( {
+		pendingOrReceiptId,
+		selectedSiteSlug,
+		selectedFeature,
+		cart,
+		isJetpackNotAtomic,
+		product,
+	} );
+
+	// Generate and save the thank-you page url in a cookie in certain cases
+	setDestinationIfEcommPlan( {
+		cart,
+		selectedSiteSlug,
+		destinationUrl: fallbackUrl,
+	} );
+
+	// Fetch the thank-you page url from a cookie if it is set
+	const signupDestination = retrieveSignupDestination();
+
+	if ( hasRenewalItem( cart ) ) {
+		const renewalItem = getRenewalItems( cart )[ 0 ];
+		return managePurchase( renewalItem.extra.purchaseDomain, renewalItem.extra.purchaseId );
+	}
+
+	// If cart is empty, then send the user to a generic page (not post-purchase related).
+	// For example, this case arises when a Skip button is clicked on a concierge upsell
+	// nudge opened by a direct link to /offer-support-session.
+	if ( ':receiptId' === pendingOrReceiptId && isEmpty( getAllCartItems( cart ) ) ) {
+		return signupDestination || fallbackUrl;
+	}
+
+	// Domain only flow
+	if ( cart.create_new_blog ) {
+		const newBlogUrl = signupDestination || fallbackUrl;
+		return `${ newBlogUrl }/${ pendingOrReceiptId }`;
+	}
+
+	const redirectPathForGSuiteUpsell = getRedirectUrlForGSuiteNudge( {
+		pendingOrReceiptId,
+		selectedSiteSlug,
+		cart,
+		stepResult,
+		isNewlyCreatedSite,
+	} );
+	if ( redirectPathForGSuiteUpsell ) {
+		return redirectPathForGSuiteUpsell;
+	}
+
+	const redirectPathForConciergeUpsell = getRedirectUrlForConciergeNudge( {
+		pendingOrReceiptId,
+		cart,
+		selectedSiteSlug,
+		previousRoute,
+	} );
+	if ( redirectPathForConciergeUpsell ) {
+		return redirectPathForConciergeUpsell;
+	}
+
+	// Display mode is used to show purchase specific messaging, for e.g. the Schedule Session button
+	// when purchasing a concierge session.
+	const displayModeParam = getDisplayModeParamFromCart( cart );
+	if ( isEligibleForSignupDestinationRedirect ) {
+		return getUrlWithQueryParam( signupDestination || fallbackUrl, displayModeParam );
+	}
+
+	return getUrlWithQueryParam( fallbackUrl, displayModeParam );
+}
+
+function getFallbackDestination( {
+	pendingOrReceiptId,
+	selectedSiteSlug,
+	selectedFeature,
+	cart,
+	isJetpackNotAtomic,
+	product,
+} ) {
+	const isCartEmpty = isEmpty( getAllCartItems( cart ) );
+	const isReceiptEmpty = ':receiptId' === pendingOrReceiptId;
+
+	// We will show the Thank You page if there's a site slug and either one of the following is true:
+	// - has a receipt number
+	// - does not have a receipt number but has an item in cart(as in the case of paying with a redirect payment type)
+	if ( selectedSiteSlug && ( ! isReceiptEmpty || ! isCartEmpty ) ) {
+		const isJetpackProduct = product && includes( JETPACK_BACKUP_PRODUCTS, product );
+		// If we just purchased a Jetpack product, redirect to the my plans page.
+		if ( isJetpackNotAtomic && isJetpackProduct ) {
+			return `/plans/my-plan/${ selectedSiteSlug }?thank-you&product=${ product }`;
+		}
+		// If we just purchased a Jetpack plan (not a Jetpack product), redirect to the Jetpack onboarding plugin install flow.
+		if ( isJetpackNotAtomic ) {
+			return `/plans/my-plan/${ selectedSiteSlug }?thank-you&install=all`;
+		}
+
+		return selectedFeature && isValidFeatureKey( selectedFeature )
+			? `/checkout/thank-you/features/${ selectedFeature }/${ selectedSiteSlug }/${ pendingOrReceiptId }`
+			: `/checkout/thank-you/${ selectedSiteSlug }/${ pendingOrReceiptId }`;
+	}
+
+	return '/';
 }
